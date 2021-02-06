@@ -4133,6 +4133,22 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 		tcpHealthCheckPort = int32(*listener.InstancePort)
 		break
 	}
+	// In case we have http and https listeners we need to set healthcheck port correctly
+	annotationProtocol := strings.ToLower(annotations[ServiceAnnotationLoadBalancerBEProtocol])
+	var sslHealthCheckPort int32
+	sslHealthCheckPort = 0
+	if annotationProtocol == "https" || annotationProtocol == "ssl" {
+		for _, listener := range listeners {
+			if listener.InstancePort == nil {
+				continue
+			}
+			if listener.InstanceProtocol != "HTTPS" || listener.InstanceProtocol != "SSL" {
+				continue
+			}
+			sslHealthCheckPort = int32(*listener.InstancePort)
+			break
+		}
+	}
 	if path, healthCheckNodePort := servicehelpers.GetServiceHealthCheckPathPort(apiService); path != "" {
 		klog.V(4).Infof("service %v (%v) needs health checks on :%d%s)", apiService.Name, loadBalancerName, healthCheckNodePort, path)
 		if annotations[ServiceAnnotationLoadBalancerHealthCheckPort] == defaultHealthCheckPort {
@@ -4144,15 +4160,18 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 		}
 	} else {
 		klog.V(4).Infof("service %v does not need custom health checks", apiService.Name)
-		annotationProtocol := strings.ToLower(annotations[ServiceAnnotationLoadBalancerBEProtocol])
 		var hcProtocol string
 		if annotationProtocol == "https" || annotationProtocol == "ssl" {
 			hcProtocol = "SSL"
 		} else {
 			hcProtocol = "TCP"
 		}
-		// there must be no path on TCP health check
-		err = c.ensureLoadBalancerHealthCheck(loadBalancer, hcProtocol, tcpHealthCheckPort, "", annotations)
+		// there must be no path on TCP/SSL health check
+		if sslHealthCheckPort == 0 {
+			err = c.ensureLoadBalancerHealthCheck(loadBalancer, hcProtocol, tcpHealthCheckPort, "", annotations)
+		} else {
+			err = c.ensureLoadBalancerHealthCheck(loadBalancer, hcProtocol, sslHealthCheckPort, "", annotations)
+		}
 		if err != nil {
 			return nil, err
 		}
